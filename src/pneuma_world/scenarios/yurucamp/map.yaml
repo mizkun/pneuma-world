@@ -1,0 +1,29 @@
+name: 野外活動サークル部室
+width: 20
+height: 15
+locations:
+  - id: clubroom
+    name: 部室
+    bounds: [[0, 0], [19, 14]]
+    points_of_interest:
+      - id: table_a
+        name: テーブルA
+        position: [5, 5]
+      - id: table_b
+        name: テーブルB
+        position: [12, 5]
+      - id: bookshelf
+        name: 本棚
+        position: [3, 1]
+      - id: whiteboard
+        name: ホワイトボード
+        position: [5, 12]
+      - id: window
+        name: 窓際
+        position: [16, 1]
+      - id: door
+        name: 入口
+        position: [14, 14]
+  - id: hallway
+    name: 廊下
+    bounds: [[0, 15], [19, 17]]

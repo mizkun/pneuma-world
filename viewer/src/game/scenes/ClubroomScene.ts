@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { buildGridFromCollisionData, createPathfinder, type PathPoint } from '../pathfinding/Pathfinder';
 import { gameBridge } from '../../bridge/GameBridge';
+import { ActionQueueManager, type MiniAction } from '../actionQueue/ActionQueueManager';
 
 /** Sprite‑sheet layout (16×32 frames, 56 cols per sheet row) */
 const COLS_PER_ROW = 56;
@@ -15,9 +16,9 @@ const WALK_LEFT_START = WALK_BASE + 18;
 
 /** Idle frames (row 0): Down=0, Up=1, Right=2, Left=3 */
 const IDLE_DOWN = 0;
-// const IDLE_UP = 1;
-// const IDLE_RIGHT = 2;
-// const IDLE_LEFT = 3;
+const IDLE_UP = 1;
+const IDLE_RIGHT = 2;
+const IDLE_LEFT = 3;
 
 /** Character definitions */
 interface CharacterDef {
@@ -44,12 +45,20 @@ interface SpeechBubble {
   timer?: Phaser.Time.TimerEvent;
 }
 
+/** POI座標マップ（タイル座標） — clubroom.json の objects レイヤーから生成 */
+interface POI {
+  tileX: number;
+  tileY: number;
+}
+
 export class ClubroomScene extends Phaser.Scene {
   private sprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
   private nameLabels: Map<string, Phaser.GameObjects.Text> = new Map();
   private speechBubbles: Map<string, SpeechBubble> = new Map();
   private collisionGrid: number[][] = [];
   private walkingChars: Set<string> = new Set();
+  private poiMap: Map<string, POI> = new Map();
+  private actionQueueManager!: ActionQueueManager;
 
   constructor() {
     super('ClubroomScene');
@@ -124,13 +133,37 @@ export class ClubroomScene extends Phaser.Scene {
     // Set camera bounds to map size
     this.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 
+    // Build POI map from objects layer
+    const objectLayer = map.getObjectLayer('objects');
+    if (objectLayer) {
+      for (const obj of objectLayer.objects) {
+        if (obj.name && obj.x !== undefined && obj.y !== undefined) {
+          this.poiMap.set(obj.name, {
+            tileX: Math.floor(obj.x / TILE_SIZE),
+            tileY: Math.floor(obj.y / TILE_SIZE),
+          });
+        }
+      }
+    }
+
+    // Initialize ActionQueueManager
+    this.actionQueueManager = new ActionQueueManager((charKey, action) => {
+      this.handleStartAction(charKey, action);
+    });
+
     // Bridge: React -> Phaser イベントリスナー
     gameBridge.on('speech', (data: { characterId: string; content: string }) => {
       this.showSpeechBubble(data.characterId, data.content);
+      // 会話中はキュー一時停止
+      this.actionQueueManager.pause(data.characterId);
     });
 
     gameBridge.on('world_state', (_data: any) => {
       // キャラクターの位置や状態を更新（将来用）
+    });
+
+    gameBridge.on('action_queue', (data: { character_id: string; actions: MiniAction[] }) => {
+      this.actionQueueManager.setQueue(data.character_id, data.actions);
     });
 
     // Debug: click character for speech bubble, click elsewhere to move aoi
@@ -149,6 +182,17 @@ export class ClubroomScene extends Phaser.Scene {
       const tileX = Math.floor(worldPoint.x / TILE_SIZE);
       const tileY = Math.floor(worldPoint.y / TILE_SIZE);
       this.moveCharacterTo('aoi', tileX, tileY);
+    });
+
+    // デバッグ用: 3秒後にデモキューを自動実行（WebSocket 未接続時の確認用）
+    this.time.delayedCall(3000, () => {
+      this.actionQueueManager.setQueue('aoi', [
+        { action: 'walk_to', target: 'bookshelf', duration: 0 },
+        { action: 'interact', target: 'bookshelf', animation: 'pick_book', duration: 2 },
+        { action: 'walk_to', target: 'chair_1', duration: 0 },
+        { action: 'sit', target: 'chair_1', duration: 10 },
+        { action: 'idle_animation', animation: 'stretch', duration: 2 },
+      ]);
     });
   }
 
@@ -226,10 +270,14 @@ export class ClubroomScene extends Phaser.Scene {
 
   /**
    * Move a character to the target tile using pathfinding.
+   * onComplete is called when the character arrives (or immediately if path not found).
    */
-  moveCharacterTo(charKey: string, targetTileX: number, targetTileY: number) {
+  moveCharacterTo(charKey: string, targetTileX: number, targetTileY: number, onComplete?: () => void) {
     const sprite = this.sprites.get(charKey);
-    if (!sprite || this.collisionGrid.length === 0) return;
+    if (!sprite || this.collisionGrid.length === 0) {
+      onComplete?.();
+      return;
+    }
     if (this.walkingChars.has(charKey)) return; // already walking
 
     // Validate target is walkable
@@ -239,9 +287,13 @@ export class ClubroomScene extends Phaser.Scene {
       targetTileX < 0 ||
       targetTileX >= this.collisionGrid[0].length
     ) {
+      onComplete?.();
       return;
     }
-    if (this.collisionGrid[targetTileY][targetTileX] !== 0) return;
+    if (this.collisionGrid[targetTileY][targetTileX] !== 0) {
+      onComplete?.();
+      return;
+    }
 
     const currentTileX = Math.floor(sprite.x / TILE_SIZE);
     const currentTileY = Math.floor((sprite.y - 1) / TILE_SIZE); // -1 because origin is bottom
@@ -254,19 +306,24 @@ export class ClubroomScene extends Phaser.Scene {
       targetTileY,
       (path: PathPoint[] | null) => {
         if (path && path.length > 1) {
-          this.walkPath(charKey, path.slice(1)); // skip starting tile
+          this.walkPath(charKey, path.slice(1), onComplete); // skip starting tile
+        } else {
+          onComplete?.();
         }
       },
     );
     easystar.calculate();
   }
 
-  private walkPath(charKey: string, path: PathPoint[]) {
+  private walkPath(charKey: string, path: PathPoint[], onComplete?: () => void) {
     const sprite = this.sprites.get(charKey);
-    if (!sprite) return;
+    if (!sprite) {
+      onComplete?.();
+      return;
+    }
 
     this.walkingChars.add(charKey);
-    this.walkStep(charKey, sprite, path, 0);
+    this.walkStep(charKey, sprite, path, 0, onComplete);
   }
 
   private walkStep(
@@ -274,12 +331,14 @@ export class ClubroomScene extends Phaser.Scene {
     sprite: Phaser.GameObjects.Sprite,
     path: PathPoint[],
     index: number,
+    onComplete?: () => void,
   ) {
     if (index >= path.length) {
       // Arrived — set idle frame facing down
       sprite.stop();
       sprite.setFrame(IDLE_DOWN);
       this.walkingChars.delete(charKey);
+      onComplete?.();
       return;
     }
 
@@ -312,7 +371,7 @@ export class ClubroomScene extends Phaser.Scene {
       duration: Math.max(duration, 50),
       ease: 'Linear',
       onComplete: () => {
-        this.walkStep(charKey, sprite, path, index + 1);
+        this.walkStep(charKey, sprite, path, index + 1, onComplete);
       },
     });
   }
@@ -399,10 +458,151 @@ export class ClubroomScene extends Phaser.Scene {
       bubble.graphics.destroy();
       bubble.text.destroy();
       this.speechBubbles.delete(characterKey);
+      // 吹き出しが消えたらキュー再開
+      this.actionQueueManager.resume(characterKey);
     }
   }
 
-  update() {
+  /**
+   * ActionQueueManager からアクション開始時に呼ばれるハンドラ
+   */
+  private handleStartAction(charKey: string, action: MiniAction): void {
+    switch (action.action) {
+      case 'walk_to': {
+        const poi = action.target ? this.poiMap.get(action.target) : undefined;
+        if (poi) {
+          // POI の隣接する歩行可能タイルを探す（POI 自体が壁の場合）
+          const targetTile = this.findWalkableTileNear(poi.tileX, poi.tileY);
+          this.moveCharacterTo(charKey, targetTile.x, targetTile.y, () => {
+            this.actionQueueManager.notifyMoveComplete(charKey);
+          });
+        } else {
+          // POI が見つからない場合はスキップ
+          this.actionQueueManager.notifyMoveComplete(charKey);
+        }
+        break;
+      }
+      case 'sit': {
+        // 座りポーズ: 下向き idle フレームに固定
+        const sprite = this.sprites.get(charKey);
+        if (sprite) {
+          sprite.stop();
+          sprite.setFrame(IDLE_DOWN);
+        }
+        break;
+      }
+      case 'interact': {
+        // 対象の方向を向く
+        const targetPoi = action.target ? this.poiMap.get(action.target) : undefined;
+        if (targetPoi) {
+          this.faceToward(charKey, targetPoi.tileX, targetPoi.tileY);
+        }
+        break;
+      }
+      case 'idle_animation': {
+        this.playIdleAnimation(charKey, action.animation);
+        break;
+      }
+      default:
+        // 未知のアクションは何もしない（duration 待ち）
+        break;
+    }
+  }
+
+  /**
+   * 指定タイル付近の歩行可能タイルを探す。
+   * 本体タイルが歩行可能ならそのまま返す。そうでなければ隣接4方向を探す。
+   */
+  private findWalkableTileNear(tileX: number, tileY: number): { x: number; y: number } {
+    if (this.isTileWalkable(tileX, tileY)) {
+      return { x: tileX, y: tileY };
+    }
+    // 隣接タイル（下、右、左、上の順）
+    const offsets = [
+      { dx: 0, dy: 1 },
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: -1 },
+      { dx: 1, dy: 1 },
+      { dx: -1, dy: 1 },
+      { dx: 1, dy: -1 },
+      { dx: -1, dy: -1 },
+    ];
+    for (const { dx, dy } of offsets) {
+      const nx = tileX + dx;
+      const ny = tileY + dy;
+      if (this.isTileWalkable(nx, ny)) {
+        return { x: nx, y: ny };
+      }
+    }
+    // フォールバック: 元のタイル
+    return { x: tileX, y: tileY };
+  }
+
+  private isTileWalkable(tileX: number, tileY: number): boolean {
+    if (
+      tileY < 0 || tileY >= this.collisionGrid.length ||
+      tileX < 0 || tileX >= this.collisionGrid[0].length
+    ) {
+      return false;
+    }
+    return this.collisionGrid[tileY][tileX] === 0;
+  }
+
+  /**
+   * キャラクターを指定タイルの方向に向かせる
+   */
+  private faceToward(charKey: string, targetTileX: number, targetTileY: number): void {
+    const sprite = this.sprites.get(charKey);
+    if (!sprite) return;
+
+    const charTileX = Math.floor(sprite.x / TILE_SIZE);
+    const charTileY = Math.floor((sprite.y - 1) / TILE_SIZE);
+    const dx = targetTileX - charTileX;
+    const dy = targetTileY - charTileY;
+
+    sprite.stop();
+    if (Math.abs(dx) > Math.abs(dy)) {
+      sprite.setFrame(dx > 0 ? IDLE_RIGHT : IDLE_LEFT);
+    } else {
+      sprite.setFrame(dy > 0 ? IDLE_DOWN : IDLE_UP);
+    }
+  }
+
+  /**
+   * 簡易アイドルアニメーション
+   */
+  private playIdleAnimation(charKey: string, animation?: string): void {
+    const sprite = this.sprites.get(charKey);
+    if (!sprite) return;
+
+    switch (animation) {
+      case 'stretch': {
+        // 伸び: スプライトを少し上に移動して戻す
+        this.tweens.add({
+          targets: sprite,
+          y: sprite.y - 4,
+          duration: 400,
+          ease: 'Sine.easeInOut',
+          yoyo: true,
+        });
+        break;
+      }
+      case 'look_around': {
+        // 左右を向く
+        const originalFrame = sprite.frame.name;
+        this.time.delayedCall(0, () => { sprite.setFrame(IDLE_LEFT); });
+        this.time.delayedCall(500, () => { sprite.setFrame(IDLE_RIGHT); });
+        this.time.delayedCall(1000, () => { sprite.setFrame(Number(originalFrame) || IDLE_DOWN); });
+        break;
+      }
+      default:
+        // 何もしない（idle フレームのまま duration 待ち）
+        break;
+    }
+  }
+
+  update(_time: number, delta: number) {
     // Make name labels and speech bubbles follow their sprites
     for (const [key, sprite] of this.sprites.entries()) {
       const label = this.nameLabels.get(key);
@@ -434,6 +634,16 @@ export class ClubroomScene extends Phaser.Scene {
         );
         bubble.graphics.lineStyle(1, 0x000000, 0.3);
         bubble.graphics.strokeRoundedRect(rectX, rectY, bubbleWidth, bubbleHeight, 3);
+      }
+    }
+
+    // アクションキューの更新
+    this.actionQueueManager.update(delta);
+
+    // キュー完了したキャラクターを下向き idle に固定
+    for (const [charKey] of this.sprites) {
+      if (this.actionQueueManager.isQueueComplete(charKey) && !this.walkingChars.has(charKey)) {
+        // キューが完了して歩行中でもなければ idle 状態を維持（既に idle なら何もしない）
       }
     }
   }

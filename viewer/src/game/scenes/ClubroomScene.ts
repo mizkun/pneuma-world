@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { buildGridFromCollisionData, createPathfinder, type PathPoint } from '../pathfinding/Pathfinder';
+import { gameBridge } from '../../bridge/GameBridge';
 
 /** Sprite‑sheet layout (16×32 frames, 56 cols per sheet row) */
 const COLS_PER_ROW = 56;
@@ -122,6 +123,15 @@ export class ClubroomScene extends Phaser.Scene {
 
     // Set camera bounds to map size
     this.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
+
+    // Bridge: React -> Phaser イベントリスナー
+    gameBridge.on('speech', (data: { characterId: string; content: string }) => {
+      this.showSpeechBubble(data.characterId, data.content);
+    });
+
+    gameBridge.on('world_state', (_data: any) => {
+      // キャラクターの位置や状態を更新（将来用）
+    });
 
     // Debug: click character for speech bubble, click elsewhere to move aoi
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -675,3 +675,385 @@ class TestRunConversationEndDetection:
         # Should end after: aine opens + chloe says farewell = 2 turns
         assert len(result) == 2
         assert result[1][1] == "じゃあね、またね！"
+
+
+# --- Helpers for multi-person tests ---
+
+
+def _make_three_person_world_state() -> WorldState:
+    """Create a WorldState with 3 characters in the same room."""
+    chars = {
+        "aine": CharacterState(
+            character_id="aine",
+            location="clubroom",
+            position=Position(100, 100),
+            activity="idle",
+        ),
+        "chloe": CharacterState(
+            character_id="chloe",
+            location="clubroom",
+            position=Position(150, 100),
+            activity="idle",
+        ),
+        "mira": CharacterState(
+            character_id="mira",
+            location="clubroom",
+            position=Position(120, 150),
+            activity="idle",
+        ),
+    }
+    return WorldState(
+        tick=1,
+        world_time=datetime(2026, 3, 1, 10, 30, 0, tzinfo=JST),
+        characters=chars,
+        active_conversations=[],
+        locations={
+            "clubroom": Location(
+                id="clubroom",
+                name="部室",
+                bounds=(Position(0, 0), Position(200, 200)),
+            ),
+        },
+    )
+
+
+def _make_three_person_engines(
+    aine_responses: list[MessageOutput] | None = None,
+    chloe_responses: list[MessageOutput] | None = None,
+    mira_responses: list[MessageOutput] | None = None,
+) -> dict[str, AsyncMock]:
+    """Create mock RuntimeEngines for aine, chloe, and mira."""
+    aine_engine = AsyncMock()
+    chloe_engine = AsyncMock()
+    mira_engine = AsyncMock()
+
+    if aine_responses:
+        aine_engine.process_message.side_effect = aine_responses
+    else:
+        aine_engine.process_message.return_value = _make_message_output("うん、そうだね")
+
+    if chloe_responses:
+        chloe_engine.process_message.side_effect = chloe_responses
+    else:
+        chloe_engine.process_message.return_value = _make_message_output("おはよう！")
+
+    if mira_responses:
+        mira_engine.process_message.side_effect = mira_responses
+    else:
+        mira_engine.process_message.return_value = _make_message_output("私もそう思う")
+
+    return {"aine": aine_engine, "chloe": chloe_engine, "mira": mira_engine}
+
+
+def _make_three_person_names() -> dict[str, str]:
+    return {"aine": "アイネ", "chloe": "クロエ", "mira": "ミラ"}
+
+
+def _make_mock_llm_adapter(responses: list[str] | None = None) -> AsyncMock:
+    """Create a mock LLMAdapter for willingness checks.
+
+    Each response should be 'yes' or 'no'.
+    """
+    from pneuma_core.llm.adapter import LLMResponse
+
+    adapter = AsyncMock()
+    if responses:
+        adapter.generate.side_effect = [
+            LLMResponse(content=r, model="haiku", usage={}) for r in responses
+        ]
+    else:
+        adapter.generate.return_value = LLMResponse(
+            content="yes", model="haiku", usage={}
+        )
+    return adapter
+
+
+# --- Multi-Person Conversation Tests ---
+
+
+class TestMultiPersonConversation:
+    """Tests for 3+ person conversation with willingness check."""
+
+    @pytest.mark.asyncio
+    async def test_three_person_willingness_check_is_called(
+        self, tmp_path: Path
+    ) -> None:
+        """3人会話で発言意思判定が行われることを確認。"""
+        # LLM adapter: both chloe and mira want to speak (round 1)
+        # Provide enough responses for willingness checks across turns
+        llm = _make_mock_llm_adapter(["yes", "yes", "no", "no"])
+
+        engines = _make_three_person_engines(
+            chloe_responses=[_make_message_output("そうだね！")],
+            mira_responses=[_make_message_output("私もそう思う！")],
+        )
+        world_log = WorldLog(log_dir=tmp_path)
+        bus = InteractionBus(
+            engines=engines,
+            world_log=world_log,
+            character_names=_make_three_person_names(),
+            llm=llm,
+        )
+
+        conversation = Conversation(
+            id="conv-multi-1",
+            participant_ids=["aine", "chloe", "mira"],
+            started_at=datetime(2026, 3, 1, 10, 30, 0, tzinfo=JST),
+            location="clubroom",
+        )
+        world_state = _make_three_person_world_state()
+
+        result = await bus.run_conversation(
+            conversation=conversation,
+            opening_message="みんなおはよう！",
+            world_state=world_state,
+            max_turns=3,
+        )
+
+        # Opening + at least one response from willingness-checked speaker
+        assert len(result) >= 2
+        # LLM adapter should have been called for willingness checks
+        assert llm.generate.call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_all_decline_ends_conversation(self, tmp_path: Path) -> None:
+        """全員が「発言しない」で会話が終了することを確認。"""
+        # LLM adapter: both chloe and mira say "no"
+        llm = _make_mock_llm_adapter(["no", "no"])
+
+        engines = _make_three_person_engines()
+        world_log = WorldLog(log_dir=tmp_path)
+        bus = InteractionBus(
+            engines=engines,
+            world_log=world_log,
+            character_names=_make_three_person_names(),
+            llm=llm,
+        )
+
+        conversation = Conversation(
+            id="conv-multi-2",
+            participant_ids=["aine", "chloe", "mira"],
+            started_at=datetime(2026, 3, 1, 10, 30, 0, tzinfo=JST),
+            location="clubroom",
+        )
+        world_state = _make_three_person_world_state()
+
+        result = await bus.run_conversation(
+            conversation=conversation,
+            opening_message="みんなおはよう！",
+            world_state=world_state,
+            max_turns=8,
+        )
+
+        # Only the opening message, then nobody wanted to speak
+        assert len(result) == 1
+        assert result[0] == ("aine", "みんなおはよう！")
+
+    @pytest.mark.asyncio
+    async def test_two_person_uses_alternating_mode(self, tmp_path: Path) -> None:
+        """2人の会話は従来通り交互発言で動作することを確認。"""
+        aine_responses = [_make_message_output("aine-reply")]
+        chloe_responses = [_make_message_output("chloe-reply")]
+        engines = _make_engines(
+            aine_responses=aine_responses,
+            chloe_responses=chloe_responses,
+        )
+        world_log = WorldLog(log_dir=tmp_path)
+        # llm=None: 2人会話ではLLMアダプタ不要
+        bus = InteractionBus(
+            engines=engines,
+            world_log=world_log,
+            character_names=_make_character_names(),
+        )
+        world_state = _make_world_state()
+
+        conversation = Conversation(
+            id="conv-2p",
+            participant_ids=["aine", "chloe"],
+            started_at=world_state.world_time,
+            location="clubroom",
+        )
+
+        result = await bus.run_conversation(
+            conversation=conversation,
+            opening_message="やっほー",
+            world_state=world_state,
+            max_turns=3,
+        )
+
+        # Should alternate: aine, chloe, aine
+        assert result[0] == ("aine", "やっほー")
+        assert result[1][0] == "chloe"
+        assert result[2][0] == "aine"
+
+    @pytest.mark.asyncio
+    async def test_willingness_check_runs_in_parallel(
+        self, tmp_path: Path
+    ) -> None:
+        """発言意思判定が asyncio.gather で並列実行されることを確認。"""
+        import asyncio
+
+        call_order: list[str] = []
+        original_gather = asyncio.gather
+
+        # Track that asyncio.gather is used for willingness checks
+        gather_called = False
+
+        async def tracking_gather(*coros, **kwargs):
+            nonlocal gather_called
+            gather_called = True
+            return await original_gather(*coros, **kwargs)
+
+        # Both say yes, first speaker (chloe) responds
+        llm = _make_mock_llm_adapter(["yes", "yes"])
+        engines = _make_three_person_engines(
+            chloe_responses=[_make_message_output("はい！")],
+            mira_responses=[_make_message_output("うん！")],
+        )
+        world_log = WorldLog(log_dir=tmp_path)
+        bus = InteractionBus(
+            engines=engines,
+            world_log=world_log,
+            character_names=_make_three_person_names(),
+            llm=llm,
+        )
+
+        conversation = Conversation(
+            id="conv-parallel",
+            participant_ids=["aine", "chloe", "mira"],
+            started_at=datetime(2026, 3, 1, 10, 30, 0, tzinfo=JST),
+            location="clubroom",
+        )
+        world_state = _make_three_person_world_state()
+
+        with patch("pneuma_world.interaction_bus.asyncio.gather", side_effect=tracking_gather):
+            result = await bus.run_conversation(
+                conversation=conversation,
+                opening_message="テスト",
+                world_state=world_state,
+                max_turns=2,
+            )
+
+        assert gather_called, "asyncio.gather should be used for parallel willingness checks"
+
+
+class TestConversationFrequencyGovernor:
+    """Tests for conversation frequency governor."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_conversation_over_hourly_limit(
+        self, tmp_path: Path
+    ) -> None:
+        """1時間以内の会話開始回数が上限を超えた場合、start_conversation を却下。"""
+        engines = _make_engines()
+        world_log = WorldLog(log_dir=tmp_path)
+        bus = InteractionBus(
+            engines=engines,
+            world_log=world_log,
+            character_names=_make_character_names(),
+            max_conversations_per_hour=2,
+        )
+        world_state = _make_world_state()
+
+        # Start 2 conversations (within limit)
+        for i in range(2):
+            conv = await bus.start_conversation(
+                initiator_id="aine",
+                target_id="chloe",
+                opening_message=f"会話{i}",
+                world_state=world_state,
+            )
+            assert conv is not None
+
+        # 3rd conversation should be rejected
+        result = await bus.start_conversation(
+            initiator_id="aine",
+            target_id="chloe",
+            opening_message="もう一回",
+            world_state=world_state,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_allows_conversation_after_hour_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """1時間経過後は再び会話を開始できることを確認。"""
+        engines = _make_engines()
+        world_log = WorldLog(log_dir=tmp_path)
+        bus = InteractionBus(
+            engines=engines,
+            world_log=world_log,
+            character_names=_make_character_names(),
+            max_conversations_per_hour=1,
+        )
+        world_state = _make_world_state()
+
+        # 1st conversation at 10:30
+        conv = await bus.start_conversation(
+            initiator_id="aine",
+            target_id="chloe",
+            opening_message="おはよう",
+            world_state=world_state,
+        )
+        assert conv is not None
+
+        # 2nd at 10:30 -> rejected
+        result = await bus.start_conversation(
+            initiator_id="aine",
+            target_id="chloe",
+            opening_message="もう一回",
+            world_state=world_state,
+        )
+        assert result is None
+
+        # Advance world time by 61 minutes -> allowed
+        later_state = _make_world_state()
+        later_state.world_time = world_state.world_time + timedelta(minutes=61)
+        result = await bus.start_conversation(
+            initiator_id="aine",
+            target_id="chloe",
+            opening_message="こんにちは",
+            world_state=later_state,
+        )
+        assert result is not None
+
+
+class TestMultiPersonSpeakerSelection:
+    """Tests for speaker selection logic in multi-person conversations."""
+
+    @pytest.mark.asyncio
+    async def test_addressed_person_gets_priority(self, tmp_path: Path) -> None:
+        """直前に話しかけられた人が発言優先されることを確認。"""
+        # Both want to speak, but opening mentions chloe by name
+        llm = _make_mock_llm_adapter(["yes", "yes"])
+        engines = _make_three_person_engines(
+            chloe_responses=[_make_message_output("はい、なに？")],
+            mira_responses=[_make_message_output("うん")],
+        )
+        world_log = WorldLog(log_dir=tmp_path)
+        bus = InteractionBus(
+            engines=engines,
+            world_log=world_log,
+            character_names=_make_three_person_names(),
+            llm=llm,
+        )
+
+        conversation = Conversation(
+            id="conv-priority",
+            participant_ids=["aine", "chloe", "mira"],
+            started_at=datetime(2026, 3, 1, 10, 30, 0, tzinfo=JST),
+            location="clubroom",
+        )
+        world_state = _make_three_person_world_state()
+
+        result = await bus.run_conversation(
+            conversation=conversation,
+            opening_message="クロエ、これ見て！",
+            world_state=world_state,
+            max_turns=2,
+        )
+
+        # Second speaker should be chloe (addressed by name)
+        assert len(result) >= 2
+        assert result[1][0] == "chloe"

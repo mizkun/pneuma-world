@@ -576,3 +576,115 @@ class TestWorldEngineMovement:
         await engine.tick()
 
         assert engine.state.characters["aine"].position == original_pos
+
+
+class TestBugFixIssue2:
+    """Tests for Issue #2: bug fixes and model simplification."""
+
+    def test_move_updates_location(self, tmp_path: Path) -> None:
+        """MOVE should update char.location to target_location (bug fix)."""
+        engine, _, _ = _make_engine(tmp_path=tmp_path)
+
+        # aine starts in clubroom, moves to hallway
+        assert engine.state.characters["aine"].location == "clubroom"
+
+        engine.apply_think_result(
+            "aine",
+            ThinkResult(
+                thought="廊下に行こう",
+                action_type=ActionType.MOVE,
+                action_detail="廊下に向かう",
+                target_location="hallway",
+            ),
+        )
+
+        char = engine.state.characters["aine"]
+        assert char.location == "hallway", (
+            "MOVE should update char.location to the target_location"
+        )
+
+    @pytest.mark.asyncio
+    async def test_conversation_exception_resets_conversation_id(
+        self, tmp_path: Path
+    ) -> None:
+        """If run_conversation raises an exception, conversation_id must still
+        be reset to None (try-finally)."""
+        config = TickConfig(visual_interval_seconds=1.0, think_interval_seconds=1.0)
+        engine, mock_think, mock_bus = _make_engine(
+            tick_config=config, tmp_path=tmp_path,
+        )
+
+        async def think_side_effect(char_id, char_name, world_state):
+            if char_id == "aine":
+                return ThinkResult(
+                    thought="クロエに話しかけよう",
+                    action_type=ActionType.START_CONVERSATION,
+                    action_detail="挨拶する",
+                    target_character_id="chloe",
+                )
+            return ThinkResult(
+                thought="暇",
+                action_type=ActionType.IDLE,
+            )
+
+        mock_think.execute.side_effect = think_side_effect
+        mock_bus.run_conversation.side_effect = RuntimeError("API error")
+
+        # tick should not raise (engine should handle the error)
+        await engine.tick()
+
+        aine = engine.state.characters["aine"]
+        chloe = engine.state.characters["chloe"]
+        assert aine.conversation_id is None, (
+            "conversation_id must be reset even when run_conversation raises"
+        )
+        assert chloe.conversation_id is None, (
+            "conversation_id must be reset even when run_conversation raises"
+        )
+        assert len(engine.state.active_conversations) == 0, (
+            "active_conversations should be cleaned up even on exception"
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_conversation_runs_and_cleans_up(
+        self, tmp_path: Path
+    ) -> None:
+        """START_CONVERSATION should run the conversation via InteractionBus
+        and properly clean up afterwards."""
+        config = TickConfig(visual_interval_seconds=1.0, think_interval_seconds=1.0)
+        engine, mock_think, mock_bus = _make_engine(
+            tick_config=config, tmp_path=tmp_path,
+        )
+
+        async def think_side_effect(char_id, char_name, world_state):
+            if char_id == "aine":
+                return ThinkResult(
+                    thought="クロエに話しかけよう",
+                    action_type=ActionType.START_CONVERSATION,
+                    action_detail="挨拶する",
+                    target_character_id="chloe",
+                )
+            return ThinkResult(
+                thought="暇",
+                action_type=ActionType.IDLE,
+            )
+
+        mock_think.execute.side_effect = think_side_effect
+        mock_bus.run_conversation.return_value = [
+            ("aine", "おはよう！"),
+            ("chloe", "おはよう、アイネ！"),
+        ]
+
+        results = await engine.tick()
+
+        # Verify run_conversation was called
+        mock_bus.run_conversation.assert_called_once()
+
+        # Verify cleanup
+        aine = engine.state.characters["aine"]
+        chloe = engine.state.characters["chloe"]
+        assert aine.conversation_id is None
+        assert aine.activity == "idle"
+        assert chloe.conversation_id is None
+        assert chloe.activity == "idle"
+        assert len(engine.state.active_conversations) == 0

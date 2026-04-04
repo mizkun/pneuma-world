@@ -231,7 +231,7 @@ class TestBuildSituationContextWithEvents:
             },
             active_conversations=[],
             locations={
-                "room1": Location(id="room1", name="部屋1", walkable_polygon=[]),
+                "room1": Location(id="room1", name="部屋1", bounds=(Position(0, 0), Position(100, 100))),
             },
         )
 
@@ -267,7 +267,7 @@ class TestBuildSituationContextWithEvents:
             },
             active_conversations=[],
             locations={
-                "room1": Location(id="room1", name="部屋1", walkable_polygon=[]),
+                "room1": Location(id="room1", name="部屋1", bounds=(Position(0, 0), Position(100, 100))),
             },
         )
 
@@ -316,7 +316,7 @@ class TestBuildSituationContextWithEvents:
             },
             active_conversations=[],
             locations={
-                "room1": Location(id="room1", name="部屋1", walkable_polygon=[]),
+                "room1": Location(id="room1", name="部屋1", bounds=(Position(0, 0), Position(100, 100))),
             },
         )
 

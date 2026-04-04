@@ -13,6 +13,8 @@ from pneuma_core.models.emotion import EmotionalState
 from pneuma_core.models.goals import GoalTree
 from pneuma_core.runtime.prompt_builder import PromptBuilder
 from pneuma_world.models.action import ActionType, MiniAction, ThinkResult
+from pneuma_world.models.action import ActionType, ThinkResult
+from pneuma_world.models.event import WorldEvent
 from pneuma_world.models.state import WorldState
 from pneuma_world.tools import ToolRegistry
 from pneuma_world.world_log import WorldLog
@@ -40,6 +42,7 @@ def _build_situation_context(
     character_name: str,
     world_state: WorldState,
     character_names: dict[str, str] | None = None,
+    pending_events: list[WorldEvent] | None = None,
 ) -> str:
     """Build a situation description from the world state."""
     char_state = world_state.characters.get(character_id)
@@ -73,6 +76,18 @@ def _build_situation_context(
 
     if char_state.conversation_id:
         lines.append(f"会話中: {char_state.conversation_id}")
+
+    # Inject pending events relevant to this character
+    if pending_events:
+        relevant = [
+            e for e in pending_events
+            if e.target == "world" or e.target == character_id
+        ]
+        if relevant:
+            lines.append("")
+            lines.append("## 発生中のイベント")
+            for event in relevant:
+                lines.append(f"- [{event.type}] {event.content}")
 
     return "\n".join(lines)
 

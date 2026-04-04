@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import Phaser from 'phaser';
+import { ClubroomScene } from '../game/scenes/ClubroomScene';
 
 export function WorldMap() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -11,18 +12,13 @@ export function WorldMap() {
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
       parent: containerRef.current!,
-      width: 960,   // 16px * 30tiles * 2x zoom
-      height: 960,
+      width: 640,   // 20 tiles * 16px * zoom 2
+      height: 480,  // 15 tiles * 16px * zoom 2
       pixelArt: true,
       scale: {
         zoom: 2,
       },
-      scene: {
-        preload() {},
-        create() {
-          this.add.text(100, 100, 'Clubroom Scene', { color: '#fff' });
-        },
-      },
+      scene: [ClubroomScene],
     };
 
     gameRef.current = new Phaser.Game(config);

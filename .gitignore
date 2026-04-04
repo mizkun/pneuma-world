@@ -6,3 +6,6 @@ build/
 .venv/
 .env
 .DS_Store
+
+# Large tileset assets (downloaded separately)
+viewer/public/tilesets/

@@ -60,14 +60,21 @@ function MessageItem({ message }: { message: ChatMessage }) {
   }
 }
 
-export function ChatLog() {
+interface ChatLogProps {
+  messages?: ChatMessage[];
+}
+
+export function ChatLog({ messages }: ChatLogProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // WebSocket 未接続時はデモデータを fallback として使用
+  const displayMessages = messages && messages.length > 0 ? messages : demoMessages;
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, []);
+  }, [displayMessages]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-gray-800">
@@ -76,7 +83,7 @@ export function ChatLog() {
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-4 pb-4 text-sm"
       >
-        {demoMessages.map((msg) => (
+        {displayMessages.map((msg) => (
           <MessageItem key={msg.id} message={msg} />
         ))}
       </div>

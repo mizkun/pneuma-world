@@ -197,8 +197,6 @@ class TestBuildWorldComponents:
 
         scenario_dir = (
             Path(__file__).resolve().parent.parent.parent
-            / "packages"
-            / "pneuma-world"
             / "src"
             / "pneuma_world"
             / "scenarios"
@@ -239,8 +237,6 @@ class TestBuildWorldComponents:
 
         scenario_dir = (
             Path(__file__).resolve().parent.parent.parent
-            / "packages"
-            / "pneuma-world"
             / "src"
             / "pneuma_world"
             / "scenarios"
@@ -275,8 +271,6 @@ class TestRunWorldDryRun:
 
         scenario_dir = (
             Path(__file__).resolve().parent.parent.parent
-            / "packages"
-            / "pneuma-world"
             / "src"
             / "pneuma_world"
             / "scenarios"

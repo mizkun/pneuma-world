@@ -779,8 +779,9 @@ class TestMultiPersonConversation:
         self, tmp_path: Path
     ) -> None:
         """3人会話で発言意思判定が行われることを確認。"""
-        # LLM adapter: both chloe and mira want to speak
-        llm = _make_mock_llm_adapter(["yes", "yes"])
+        # LLM adapter: both chloe and mira want to speak (round 1)
+        # Provide enough responses for willingness checks across turns
+        llm = _make_mock_llm_adapter(["yes", "yes", "no", "no"])
 
         engines = _make_three_person_engines(
             chloe_responses=[_make_message_output("そうだね！")],
@@ -812,7 +813,7 @@ class TestMultiPersonConversation:
         # Opening + at least one response from willingness-checked speaker
         assert len(result) >= 2
         # LLM adapter should have been called for willingness checks
-        assert llm.generate.call_count >= 1
+        assert llm.generate.call_count >= 2
 
     @pytest.mark.asyncio
     async def test_all_decline_ends_conversation(self, tmp_path: Path) -> None:

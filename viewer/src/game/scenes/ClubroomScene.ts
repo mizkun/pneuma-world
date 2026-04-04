@@ -21,22 +21,32 @@ const IDLE_DOWN = 0;
 /** Character definitions */
 interface CharacterDef {
   key: string;
+  displayName: string;
   spriteFile: string;
   startTileX: number;
   startTileY: number;
 }
 
 const CHARACTERS: CharacterDef[] = [
-  { key: 'aoi', spriteFile: 'Premade_Character_01.png', startTileX: 7, startTileY: 8 },
-  { key: 'rin', spriteFile: 'Premade_Character_02.png', startTileX: 9, startTileY: 6 },
-  { key: 'hinata', spriteFile: 'Premade_Character_03.png', startTileX: 11, startTileY: 8 },
+  { key: 'aoi', displayName: '葵', spriteFile: 'Premade_Character_01.png', startTileX: 7, startTileY: 8 },
+  { key: 'rin', displayName: '凛', spriteFile: 'Premade_Character_02.png', startTileX: 9, startTileY: 6 },
+  { key: 'hinata', displayName: 'ひなた', spriteFile: 'Premade_Character_03.png', startTileX: 11, startTileY: 8 },
 ];
 
 const TILE_SIZE = 16;
 const WALK_SPEED = 80; // pixels per second
 
+/** Speech bubble container for cleanup */
+interface SpeechBubble {
+  graphics: Phaser.GameObjects.Graphics;
+  text: Phaser.GameObjects.Text;
+  timer?: Phaser.Time.TimerEvent;
+}
+
 export class ClubroomScene extends Phaser.Scene {
   private sprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
+  private nameLabels: Map<string, Phaser.GameObjects.Text> = new Map();
+  private speechBubbles: Map<string, SpeechBubble> = new Map();
   private collisionGrid: number[][] = [];
   private walkingChars: Set<string> = new Set();
 
@@ -113,9 +123,19 @@ export class ClubroomScene extends Phaser.Scene {
     // Set camera bounds to map size
     this.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 
-    // Debug: click to move aoi to clicked tile
+    // Debug: click character for speech bubble, click elsewhere to move aoi
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+
+      // Check if a character sprite was clicked
+      for (const [key, sprite] of this.sprites.entries()) {
+        const bounds = sprite.getBounds();
+        if (bounds.contains(worldPoint.x, worldPoint.y)) {
+          this.showSpeechBubble(key, 'こんにちは！テスト発言です');
+          return;
+        }
+      }
+
       const tileX = Math.floor(worldPoint.x / TILE_SIZE);
       const tileY = Math.floor(worldPoint.y / TILE_SIZE);
       this.moveCharacterTo('aoi', tileX, tileY);
@@ -177,7 +197,20 @@ export class ClubroomScene extends Phaser.Scene {
       const sprite = this.add.sprite(x, y, char.key, IDLE_DOWN);
       sprite.setOrigin(0.5, 1); // anchor at bottom-center
       sprite.setDepth(furnitureDepth + 1 + char.startTileY * 0.01); // sort by Y
+      sprite.setInteractive(); // enable click detection
       this.sprites.set(char.key, sprite);
+
+      // Name label below character
+      const nameLabel = this.add.text(x, y + 2, char.displayName, {
+        fontSize: '8px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 2,
+        align: 'center',
+      });
+      nameLabel.setOrigin(0.5, 0);
+      nameLabel.setDepth(furnitureDepth + 2);
+      this.nameLabels.set(char.key, nameLabel);
     }
   }
 
@@ -274,7 +307,124 @@ export class ClubroomScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Show a speech bubble above a character sprite.
+   */
+  showSpeechBubble(characterKey: string, text: string) {
+    const sprite = this.sprites.get(characterKey);
+    if (!sprite) return;
+
+    // Remove existing bubble for this character
+    this.removeSpeechBubble(characterKey);
+
+    // Truncate text to 40 chars
+    const displayText = text.length > 40 ? text.slice(0, 40) + '...' : text;
+
+    // Create text object to measure dimensions
+    const bubbleText = this.add.text(0, 0, displayText, {
+      fontSize: '8px',
+      color: '#000000',
+      wordWrap: { width: 100 },
+      align: 'center',
+    });
+    bubbleText.setOrigin(0.5, 1);
+
+    const padding = 4;
+    const bubbleWidth = bubbleText.width + padding * 2;
+    const bubbleHeight = bubbleText.height + padding * 2;
+    const tailHeight = 4;
+
+    // Position bubble above character
+    const bubbleX = sprite.x;
+    const bubbleY = sprite.y - sprite.height - tailHeight - bubbleHeight / 2;
+
+    bubbleText.setPosition(bubbleX, bubbleY + bubbleHeight / 2 - padding);
+
+    // Draw bubble background
+    const graphics = this.add.graphics();
+    const cornerRadius = 3;
+    const rectX = bubbleX - bubbleWidth / 2;
+    const rectY = bubbleY - bubbleHeight / 2;
+
+    graphics.fillStyle(0xffffff, 1);
+    graphics.fillRoundedRect(rectX, rectY, bubbleWidth, bubbleHeight, cornerRadius);
+
+    // Draw tail (small triangle pointing down)
+    graphics.fillTriangle(
+      bubbleX - 3, rectY + bubbleHeight,
+      bubbleX + 3, rectY + bubbleHeight,
+      bubbleX, rectY + bubbleHeight + tailHeight,
+    );
+
+    // Stroke outline
+    graphics.lineStyle(1, 0x000000, 0.3);
+    graphics.strokeRoundedRect(rectX, rectY, bubbleWidth, bubbleHeight, cornerRadius);
+
+    const bubbleDepth = sprite.depth + 10;
+    graphics.setDepth(bubbleDepth);
+    bubbleText.setDepth(bubbleDepth + 1);
+
+    // Calculate display duration: 3s base + 1s per 10 chars, max 8s
+    const duration = Math.min(3000 + Math.floor(displayText.length / 10) * 1000, 8000);
+
+    // Schedule fade out
+    const timer = this.time.delayedCall(duration - 500, () => {
+      this.tweens.add({
+        targets: [graphics, bubbleText],
+        alpha: 0,
+        duration: 500,
+        onComplete: () => {
+          this.removeSpeechBubble(characterKey);
+        },
+      });
+    });
+
+    this.speechBubbles.set(characterKey, { graphics, text: bubbleText, timer });
+  }
+
+  private removeSpeechBubble(characterKey: string) {
+    const bubble = this.speechBubbles.get(characterKey);
+    if (bubble) {
+      bubble.timer?.remove();
+      bubble.graphics.destroy();
+      bubble.text.destroy();
+      this.speechBubbles.delete(characterKey);
+    }
+  }
+
   update() {
-    // EasyStar calculate is handled synchronously via createPathfinder per request
+    // Make name labels and speech bubbles follow their sprites
+    for (const [key, sprite] of this.sprites.entries()) {
+      const label = this.nameLabels.get(key);
+      if (label) {
+        label.setPosition(sprite.x, sprite.y + 2);
+      }
+
+      const bubble = this.speechBubbles.get(key);
+      if (bubble) {
+        const tailHeight = 4;
+        const bubbleHeight = bubble.text.height + 8; // padding*2
+        const bubbleWidth = bubble.text.width + 8;
+        const bubbleX = sprite.x;
+        const bubbleY = sprite.y - sprite.height - tailHeight - bubbleHeight / 2;
+
+        bubble.text.setPosition(bubbleX, bubbleY + bubbleHeight / 2 - 4);
+
+        // Redraw graphics at new position
+        bubble.graphics.clear();
+        const rectX = bubbleX - bubbleWidth / 2;
+        const rectY = bubbleY - bubbleHeight / 2;
+
+        bubble.graphics.fillStyle(0xffffff, 1);
+        bubble.graphics.fillRoundedRect(rectX, rectY, bubbleWidth, bubbleHeight, 3);
+        bubble.graphics.fillTriangle(
+          bubbleX - 3, rectY + bubbleHeight,
+          bubbleX + 3, rectY + bubbleHeight,
+          bubbleX, rectY + bubbleHeight + tailHeight,
+        );
+        bubble.graphics.lineStyle(1, 0x000000, 0.3);
+        bubble.graphics.strokeRoundedRect(rectX, rectY, bubbleWidth, bubbleHeight, 3);
+      }
+    }
   }
 }

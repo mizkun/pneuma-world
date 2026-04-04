@@ -1,0 +1,25 @@
+events:
+  - type: environment
+    content: "窓の外で猫が鳴いている"
+    weight: 3
+  - type: environment
+    content: "チャイムが鳴った"
+    weight: 2
+  - type: physical
+    content: "棚から本が1冊落ちた"
+    weight: 1
+  - type: environment
+    content: "日が暮れてきた。窓から夕焼けが見える"
+    weight: 2
+  - type: physical
+    content: "PCがフリーズした"
+    weight: 1
+  - type: environment
+    content: "廊下から他の部活の声が聞こえる"
+    weight: 3
+  - type: physical
+    content: "お菓子の袋が空になった"
+    weight: 2
+  - type: environment
+    content: "窓から涼しい風が入ってきた"
+    weight: 2

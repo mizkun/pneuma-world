@@ -93,50 +93,34 @@ class WorldEngine:
         # Handle START_CONVERSATION actions via InteractionBus
         for result in results:
             if (
-                result.action_type == ActionType.START_CONVERSATION
-                and result.target_character_id is not None
+                result.action_type != ActionType.START_CONVERSATION
+                or result.target_character_id is None
             ):
-                # Find the conversation we just created
-                initiator_id = None
-                for char_id, char_state in self._world_state.characters.items():
-                    if (
-                        char_state.conversation_id is not None
-                        and result.target_character_id
-                        in [
-                            p
-                            for conv in self._world_state.active_conversations
-                            if conv.id == char_state.conversation_id
-                            for p in conv.participant_ids
-                        ]
-                    ):
-                        # Find which character initiated
-                        for conv in self._world_state.active_conversations:
-                            if conv.id == char_state.conversation_id:
-                                initiator_id = conv.participant_ids[0]
-                                break
-                        break
+                continue
 
-                if initiator_id is not None:
-                    conv = next(
-                        c
-                        for c in self._world_state.active_conversations
-                        if initiator_id in c.participant_ids
-                        and result.target_character_id in c.participant_ids
-                    )
-                    opening = result.action_detail or "こんにちは"
-                    await self._interaction_bus.run_conversation(
-                        conversation=conv,
-                        opening_message=opening,
-                        world_state=self._world_state,
-                    )
+            # Find the conversation matching this result's target
+            conv = self._find_conversation_for(result.target_character_id)
+            if conv is None:
+                continue
 
-                    # Cleanup after conversation completes:
-                    # Reset participants' state so they are eligible for future think ticks
-                    for participant_id in conv.participant_ids:
-                        participant = self._world_state.characters.get(participant_id)
-                        if participant is not None:
-                            participant.conversation_id = None
-                            participant.activity = "idle"
+            opening = result.action_detail or "こんにちは"
+            try:
+                await self._interaction_bus.run_conversation(
+                    conversation=conv,
+                    opening_message=opening,
+                    world_state=self._world_state,
+                )
+            except Exception:
+                pass  # Log error in future; ensure cleanup always runs
+            finally:
+                # Cleanup: reset participants' state so they are eligible
+                # for future think ticks
+                for participant_id in conv.participant_ids:
+                    participant = self._world_state.characters.get(participant_id)
+                    if participant is not None:
+                        participant.conversation_id = None
+                        participant.activity = "idle"
+                if conv in self._world_state.active_conversations:
                     self._world_state.active_conversations.remove(conv)
 
         return results
@@ -166,6 +150,7 @@ class WorldEngine:
                     center_x = (location.bounds[0].x + location.bounds[1].x) // 2
                     center_y = (location.bounds[0].y + location.bounds[1].y) // 2
                     char.target_position = Position(x=center_x, y=center_y)
+                    char.location = result.target_location
             char.activity = "walking"
 
         elif result.action_type == ActionType.SOLO_ACTIVITY:
@@ -192,6 +177,13 @@ class WorldEngine:
 
         elif result.action_type == ActionType.USE_TOOL:
             char.activity = result.action_detail or f"ツール使用中: {result.tool_name}"
+
+    def _find_conversation_for(self, target_character_id: str) -> Conversation | None:
+        """Find the active conversation that includes target_character_id."""
+        for conv in self._world_state.active_conversations:
+            if target_character_id in conv.participant_ids:
+                return conv
+        return None
 
     def _update_positions(self) -> None:
         """Update positions for all characters with target_position."""

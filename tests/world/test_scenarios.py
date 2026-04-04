@@ -13,7 +13,7 @@ from pneuma_world.models.location import Location, Position
 from pneuma_world.models.state import CharacterState, WorldState
 from pneuma_world.scenarios.loader import ScenarioLoader
 
-SCENARIO_DIR = Path(__file__).resolve().parent.parent.parent / "packages" / "pneuma-world" / "src" / "pneuma_world" / "scenarios" / "yurucamp"
+SCENARIO_DIR = Path(__file__).resolve().parent.parent.parent / "src" / "pneuma_world" / "scenarios" / "yurucamp"
 CHARACTERS_DIR = SCENARIO_DIR / "characters"
 MAP_PATH = SCENARIO_DIR / "map.yaml"
 

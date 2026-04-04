@@ -1,0 +1,38 @@
+name: きらら風部室
+width: 30
+height: 33
+locations:
+  - id: clubroom
+    name: 部室
+    bounds: [[0, 0], [29, 29]]
+    points_of_interest:
+      - id: table_center
+        name: 長机
+        position: [15, 15]
+      - id: chair_1
+        name: 椅子（葵の定位置）
+        position: [12, 15]
+      - id: chair_2
+        name: 椅子（凛の定位置）
+        position: [15, 13]
+      - id: chair_3
+        name: 椅子（ひなたの定位置）
+        position: [18, 15]
+      - id: bookshelf
+        name: 棚
+        position: [3, 3]
+      - id: whiteboard
+        name: ホワイトボード
+        position: [25, 3]
+      - id: sofa
+        name: ソファ
+        position: [3, 25]
+      - id: pc
+        name: PC
+        position: [25, 25]
+      - id: door
+        name: 入口ドア
+        position: [15, 29]
+  - id: hallway
+    name: 廊下
+    bounds: [[0, 30], [29, 32]]

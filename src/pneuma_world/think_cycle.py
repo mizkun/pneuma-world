@@ -12,7 +12,7 @@ from pneuma_core.models.character import Character
 from pneuma_core.models.emotion import EmotionalState
 from pneuma_core.models.goals import GoalTree
 from pneuma_core.runtime.prompt_builder import PromptBuilder
-from pneuma_world.models.action import ActionType, ThinkResult
+from pneuma_world.models.action import ActionType, MiniAction, ThinkResult
 from pneuma_world.models.state import WorldState
 from pneuma_world.tools import ToolRegistry
 from pneuma_world.world_log import WorldLog
@@ -124,7 +124,8 @@ def _build_system_prompt(
     parts.append(
         "## 指示\n"
         "以上を踏まえて、内心の独白（thought）と次にとる行動（action_type）を決定してください。\n"
-        "thoughtは必ずあなたのキャラクター・口調で書いてください。\n\n"
+        "thoughtは必ずあなたのキャラクター・口調で書いてください。\n"
+        "次にとる行動を複数ステップで記述してください（action_queue）。\n\n"
         "## 出力形式\n"
         "以下のJSON形式で応答してください。余分なテキストは含めないでください。\n\n"
         "{\n"
@@ -134,7 +135,10 @@ def _build_system_prompt(
         '  "tool_name": "ツール名（use_toolの場合のみ）",\n'
         '  "tool_input": "ツールへの入力（use_toolの場合のみ）",\n'
         '  "target_character_id": "対象キャラID（start_conversationの場合のみ）",\n'
-        '  "target_location": "移動先のlocation_id（moveの場合のみ）"\n'
+        '  "target_location": "移動先のlocation_id（moveの場合のみ）",\n'
+        '  "action_queue": [\n'
+        '    {"action": "walk_to | interact | sit | idle_animation", "target": "対象ID", "animation": "アニメーション名", "duration": 秒数}\n'
+        "  ]\n"
         "}"
     )
 
@@ -151,6 +155,23 @@ def _parse_think_response(content: str) -> ThinkResult:
         cleaned = _strip_markdown_code_block(content)
         data = json.loads(cleaned)
 
+        # Parse action_queue with fallback to empty list
+        action_queue: list[MiniAction] = []
+        raw_queue = data.get("action_queue")
+        if isinstance(raw_queue, list):
+            try:
+                action_queue = [
+                    MiniAction(
+                        action=item["action"],
+                        target=item["target"],
+                        animation=item["animation"],
+                        duration=item["duration"],
+                    )
+                    for item in raw_queue
+                ]
+            except (KeyError, TypeError):
+                action_queue = []
+
         return ThinkResult(
             thought=data.get("thought", ""),
             action_type=ActionType(data["action_type"]),
@@ -159,6 +180,7 @@ def _parse_think_response(content: str) -> ThinkResult:
             tool_input=data.get("tool_input"),
             target_character_id=data.get("target_character_id"),
             target_location=data.get("target_location"),
+            action_queue=action_queue,
         )
     except (json.JSONDecodeError, ValueError, KeyError) as e:
         logger.warning("Failed to parse think response: %s (raw: %s)", e, content[:200])
